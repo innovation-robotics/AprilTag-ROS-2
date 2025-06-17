@@ -13,7 +13,8 @@
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <tf2_ros/transform_broadcaster.h>
-
+#include "tf2/LinearMath/Quaternion.h"
+#include "tf2/LinearMath/Matrix3x3.h"
 // apriltag
 #include "tag_functions.hpp"
 #include <apriltag.h>
@@ -92,7 +93,60 @@ void getPose(const matd_t& H,
     t.rotation.x = q.x();
     t.rotation.y = q.y();
     t.rotation.z = q.z();
+
+    // t.translation.x = 0.0;
+    // t.translation.y = 0.0;
+    // t.translation.z = 0.0;
+    // t.rotation.w = 1.0;
+    // t.rotation.x = 0.0;
+    // t.rotation.y = 0.0;
+    // t.rotation.z = 0.0;
 }
+
+// void getPose2(const matd_t& H,
+//              const Mat3& Pinv,
+//              tf2::Transform& t,
+//              const double size)
+// {
+//     // compute extrinsic camera parameter
+//     // https://dsp.stackexchange.com/a/2737/31703
+//     // H = K * T  =>  T = K^(-1) * H
+//     const Mat3 T = Pinv * Eigen::Map<const Mat3>(H.data);
+//     Mat3 R;
+//     R.col(0) = T.col(0).normalized();
+//     R.col(1) = T.col(1).normalized();
+//     R.col(2) = R.col(0).cross(R.col(1));
+
+//     // rotate by half rotation about x-axis to have z-axis
+//     // point upwards orthogonal to the tag plane
+//     R.col(1) *= -1;
+//     R.col(2) *= -1;
+
+//     // the corner coordinates of the tag in the canonical frame are (+/-1, +/-1)
+//     // hence the scale is half of the edge size
+//     const Eigen::Vector3d tt = T.rightCols<1>() / ((T.col(0).norm() + T.col(0).norm()) / 2.0) * (size / 2.0);
+
+//     const Eigen::Quaterniond q(R);
+
+//     t.translation.x = tt.x();
+//     t.translation.y = tt.y();
+//     t.translation.z = tt.z();
+//     t.rotation.w = q.w();
+//     t.rotation.x = q.x();
+//     t.rotation.y = q.y();
+//     t.rotation.z = q.z();
+    
+//     transform.setOrigin( tf::Vector3(tt.x(), tt.y(), tt.z()) );
+//     transform.setRotation( tf::Quaternion(q.x(), q.y(), q.z(), q.w()) );
+
+//     // t.translation.x = 0.0;
+//     // t.translation.y = 0.0;
+//     // t.translation.z = 0.0;
+//     // t.rotation.w = 1.0;
+//     // t.rotation.x = 0.0;
+//     // t.rotation.y = 0.0;
+//     // t.rotation.z = 0.0;
+// }
 
 
 class AprilTagNode : public rclcpp::Node {
@@ -119,6 +173,7 @@ private:
 
     const image_transport::CameraSubscriber sub_cam;
     const rclcpp::Publisher<apriltag_msgs::msg::AprilTagDetectionArray>::SharedPtr pub_detections;
+    const rclcpp::Publisher<geometry_msgs::msg::TransformStamped>::SharedPtr pose_publisher;
     tf2_ros::TransformBroadcaster tf_broadcaster;
 
     void onCamera(const sensor_msgs::msg::Image::ConstSharedPtr& msg_img, const sensor_msgs::msg::CameraInfo::ConstSharedPtr& msg_ci);
@@ -137,10 +192,12 @@ AprilTagNode::AprilTagNode(const rclcpp::NodeOptions& options)
     // topics
     sub_cam(image_transport::create_camera_subscription(this, "image_rect", std::bind(&AprilTagNode::onCamera, this, std::placeholders::_1, std::placeholders::_2), declare_parameter("image_transport", "raw", descr({}, true)), rmw_qos_profile_sensor_data)),
     pub_detections(create_publisher<apriltag_msgs::msg::AprilTagDetectionArray>("detections", rclcpp::QoS(1))),
+    pose_publisher(create_publisher<geometry_msgs::msg::TransformStamped>("pose2", 10)),
     tf_broadcaster(this)
 {
     // read-only parameters
-    const std::string tag_family = declare_parameter("family", "36h11", descr("tag family", true));
+    const std::string tag_family = declare_parameter("family", "25h9", descr("tag family", true));
+    // const std::string tag_family = declare_parameter("family", "36h11", descr("tag family", true));
     tag_edge_size = declare_parameter("size", 1.0, descr("default tag size", true));
 
     // get tag names, IDs and sizes
@@ -193,6 +250,8 @@ AprilTagNode::~AprilTagNode()
 void AprilTagNode::onCamera(const sensor_msgs::msg::Image::ConstSharedPtr& msg_img,
                             const sensor_msgs::msg::CameraInfo::ConstSharedPtr& msg_ci)
 {
+    // RCLCPP_INFO(get_logger(),"------eeeeeeeeeee-----------------------------------------");
+
     // precompute inverse projection matrix
     const Mat3 Pinv = Eigen::Map<const Eigen::Matrix<double, 3, 4, Eigen::RowMajor>>(msg_ci->p.data()).leftCols<3>().inverse();
 
@@ -206,6 +265,9 @@ void AprilTagNode::onCamera(const sensor_msgs::msg::Image::ConstSharedPtr& msg_i
     zarray_t* detections = apriltag_detector_detect(td, &im);
     mutex.unlock();
 
+    // RCLCPP_INFO(get_logger(),"zzzzzzzzzzzzzzzzz-----------------------------------------------");
+    // RCLCPP_INFO(get_logger(),"%d",zarray_size(detections));
+
     if(profile)
         timeprofile_display(td->tp);
 
@@ -218,10 +280,16 @@ void AprilTagNode::onCamera(const sensor_msgs::msg::Image::ConstSharedPtr& msg_i
         apriltag_detection_t* det;
         zarray_get(detections, i, &det);
 
-        RCLCPP_DEBUG(get_logger(),
-                     "detection %3d: id (%2dx%2d)-%-4d, hamming %d, margin %8.3f\n",
-                     i, det->family->nbits, det->family->h, det->id,
-                     det->hamming, det->decision_margin);
+        // RCLCPP_DEBUG(get_logger(),
+        //              "detection %3d: id (%2dx%2d)-%-4d, hamming %d, margin %8.3f\n",
+        //              i, det->family->nbits, det->family->h, det->id,
+        //              det->hamming, det->decision_margin);
+
+        // RCLCPP_INFO(this->get_logger(),                     
+        //             "detection %3d: id (%2dx%2d)-%-4d, hamming %d, margin %8.3f\n",
+        //              i, det->family->nbits, det->family->h, det->id,
+        //              det->hamming, det->decision_margin);
+
 
         // ignore untracked tags
         if(!tag_frames.empty() && !tag_frames.count(det->id)) { continue; }
@@ -244,15 +312,48 @@ void AprilTagNode::onCamera(const sensor_msgs::msg::Image::ConstSharedPtr& msg_i
         // 3D orientation and position
         geometry_msgs::msg::TransformStamped tf;
         tf.header = msg_img->header;
+        tf.header.frame_id = "rbx1_camera";
+        tf.header.stamp = msg_img->header.stamp;
+        
         // set child frame name by generic tag name or configured tag name
         tf.child_frame_id = tag_frames.count(det->id) ? tag_frames.at(det->id) : std::string(det->family->name) + ":" + std::to_string(det->id);
-        getPose(*(det->H), Pinv, tf.transform, tag_sizes.count(det->id) ? tag_sizes.at(det->id) : tag_edge_size);
+        RCLCPP_INFO(this->get_logger(), "frame_id %s", tf.child_frame_id.c_str());
+        RCLCPP_INFO(this->get_logger(), "count %lu, id %d", tag_frames.count(det->id), det->id);
+        RCLCPP_INFO(this->get_logger(), "tag_size %f", tag_sizes.at(det->id));
 
-        tfs.push_back(tf);
+        getPose(*(det->H), Pinv, tf.transform, tag_sizes.count(det->id) ? tag_sizes.at(det->id) : tag_edge_size);
+        
+        // tf2::Quaternion q11(
+        //         tf.transform.rotation.x,
+        //         tf.transform.rotation.y,
+        //         tf.transform.rotation.z,
+        //         tf.transform.rotation.w);
+        // tf2::Matrix3x3 m11(q11);
+        // double roll11, pitch11, yaw11;
+        // m11.getRPY(roll11, pitch11, yaw11);
+
+        // RCLCPP_INFO(this->get_logger(), "x\t%f\ny\t%f\nz\t%f\nyaw\t%f\npitch\t%f\nroll\t%f\n", 
+        // tf.transform.translation.x,
+        // tf.transform.translation.y,
+        // tf.transform.translation.z,
+        // yaw11,pitch11,roll11);
+
+        // tf.header.frame_id = "rbx1_link1";
+        // tf_broadcaster.sendTransform(tf);
+
+        // tfs.push_back(tf);
+        
+        // tf2::Transform transform;
+        // std::string child_frame_id = tag_frames.count(det->id) ? tag_frames.at(det->id) : std::string(det->family->name) + ":" + std::to_string(det->id);
+        // RCLCPP_INFO(this->get_logger(), "frame_id %s", child_frame_id.c_str());
+        // getPose2(*(det->H), Pinv, transform, tag_sizes.count(det->id) ? tag_sizes.at(det->id) : tag_edge_size);
+
+        // tf_broadcaster.sendTransform(tf2::StampedTransform(transform, ros2::Time::now(), "turtle1", "carrot1"));
+        pose_publisher->publish(tf);
     }
 
     pub_detections->publish(msg_detections);
-    tf_broadcaster.sendTransform(tfs);
+    // tf_broadcaster.sendTransform(tfs);
 
     apriltag_detections_destroy(detections);
 }

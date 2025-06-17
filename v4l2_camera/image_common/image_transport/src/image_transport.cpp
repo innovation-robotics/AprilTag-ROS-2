@@ -73,7 +73,8 @@ Subscriber create_subscription(
   const std::string & base_topic,
   const Subscriber::Callback & callback,
   const std::string & transport,
-  rmw_qos_profile_t custom_qos)
+  rmw_qos_profile_t custom_qos,
+  rclcpp::SubscriptionOptions options)
 {
   return Subscriber(node, base_topic, callback, kImpl->sub_loader_, transport, custom_qos);
 }

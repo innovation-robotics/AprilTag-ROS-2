@@ -1,8 +1,9 @@
 /**:
     ros__parameters:
         image_transport: raw    # image format: "raw" or "compressed"
-        family: 36h11           # tag family name: 16h5, 25h9, 36h11
-        size: 0.0762            # tag edge size in meters
+        # family: 36h11           # tag family name: 16h5, 25h9, 36h11
+        family: 25h9           # tag family name: 16h5, 25h9, 36h11
+        size: 0.03            # tag edge size in meters
         profile: false          # print profiling information to stdout
         max_hamming: 0          # maximum allowed hamming distance (corrected bits)
 
@@ -17,6 +18,9 @@
 
         # optional list of tags to target detection
         tag:
-            ids: [0, 1, 2, 3]                                         # tag IDs to be detected
-            frames: [tag36h11_0, tag36h11_1, tag36h11_2, tag36h11_3]  # optional frame names for each tag ID | default: tag<family>:<id> (e.g. "tag36h11:0")
-            sizes: [0.0762, 0.0762, 0.0762, 0.0762]                   # optional tag-specific edge sizes
+            ids: [2]                                         # tag IDs to be detected
+            # frames: [tag36h11_0, tag36h11_1, tag36h11_2, tag36h11_3]  # optional frame names for each tag ID | default: tag<family>:<id> (e.g. "tag36h11:0")
+            # frames: [25h9_2, 25h9_9]  # optional frame names for each tag ID | default: tag<family>:<id> (e.g. "tag36h11:0")
+            # sizes: [0.03, 0.06]                   # optional tag-specific edge sizes
+            frames: [25h9_2]  # optional frame names for each tag ID | default: tag<family>:<id> (e.g. "tag36h11:0")
+            sizes: [0.03]                   # optional tag-specific edge sizes
